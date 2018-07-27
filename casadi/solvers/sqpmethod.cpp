@@ -234,14 +234,14 @@ namespace casadi {
     alloc_w(nx_, true); // gLag_old_
 
     // Gradient of the objective
-    alloc_w(nx_, true); // gf_
+    alloc_w(nx_, true); // gf
 
     // Bounds of the QP
     alloc_w(nx_+ng_, true); // lbdz
     alloc_w(nx_+ng_, true); // ubdz
 
     // QP solution
-    alloc_w(nx_, true); // dx_
+    alloc_w(nx_+ng_, true); // dz
     alloc_w(nx_+ng_, true); // dlam
 
     // Hessian approximation
@@ -276,7 +276,7 @@ namespace casadi {
     m->ubdz = w; w += nx_ + ng_;
 
     // QP solution
-    m->dx = w; w += nx_;
+    m->dz = w; w += nx_ + ng_;
     m->dlam = w; w += nx_ + ng_;
 
     // Hessian approximation
@@ -337,7 +337,7 @@ namespace casadi {
       double du_inf = casadi_norm_inf(nx_, m->gLag);
 
       // inf-norm of step
-      double dx_norminf = casadi_norm_inf(nx_, m->dx);
+      double dx_norminf = casadi_norm_inf(nx_, m->dz);
 
       // Printing information about the actual iterate
       if (print_iteration_) {
@@ -397,7 +397,7 @@ namespace casadi {
         // Update BFGS
         if (m->iter_count % lbfgs_memory_ == 0) casadi_bfgs_reset(Hsp_, m->Bk);
         // Update the Hessian approximation
-        casadi_bfgs(Hsp_, m->Bk, m->dx, m->gLag, m->gLag_old, m->w);
+        casadi_bfgs(Hsp_, m->Bk, m->dz, m->gLag, m->gLag_old, m->w);
       }
 
       // Formulate the QP
@@ -408,17 +408,16 @@ namespace casadi {
 
       // Intitial guess
       casadi_copy(m->lam, nx_+ng_, m->dlam);
-      casadi_fill(m->dx, nx_, 0.);
+      casadi_fill(m->dz, nx_, 0.);
 
       // Increase counter
       m->iter_count++;
 
       // Solve the QP
-      solve_QP(m, m->Bk, m->gf, m->lbdz, m->ubdz, m->Jk,
-               m->dx, m->dlam);
+      solve_QP(m);
 
       // Detecting indefiniteness
-      double gain = casadi_bilin(m->Bk, Hsp_, m->dx, m->dx);
+      double gain = casadi_bilin(m->Bk, Hsp_, m->dz, m->dz);
       if (gain < 0) {
         if (print_status_) print("WARNING(sqpmethod): Indefinite Hessian detected\n");
       }
@@ -427,15 +426,10 @@ namespace casadi {
       m->sigma = std::fmax(m->sigma, 1.01*casadi_norm_inf(nx_+ng_, m->dlam));
 
       // Calculate L1-merit function in the actual iterate
-      double l1_infeas = casadi_max_viol(nx_+ng_, m->z, m->lbz, m->ubz);
-
-      // Right-hand side of Armijo condition
-      double F_sens = casadi_dot(nx_, m->dx, m->gf);
-      double L1dir = F_sens - m->sigma * l1_infeas;
-      double L1merit = m->f + m->sigma * l1_infeas;
+      double l1 = m->f + m->sigma * casadi_sum_viol(nx_+ng_, m->z, m->lbz, m->ubz);
 
       // Storing the actual merit function value in a list
-      m->merit_mem[m->merit_ind] = L1merit;
+      m->merit_mem[m->merit_ind] = l1;
       ++m->merit_ind %= merit_memsize_;
 
       // Calculating maximal merit function value so far
@@ -444,11 +438,21 @@ namespace casadi {
         if (meritmax < m->merit_mem[i]) meritmax = m->merit_mem[i];
       }
 
+      // Tangent of l1 in the search direction
+      double tl1 = casadi_dot(nx_, m->dz, m->gf);
+      for (size_t i=0; i<nx_+ng_; ++i) {
+        if (m->z[i]<m->lbz[i]) {
+          tl1 += m->sigma * (m->z[i]-m->lbz[i]) * m->dz[i];
+        } else if (m->z[i]>m->ubz[i]) {
+          tl1 += m->sigma * (m->z[i]-m->ubz[i]) * m->dz[i];
+        }
+      }
+
       // Stepsize
       t = 1.0;
       double fk_cand;
       // Merit function value in candidate
-      double L1merit_cand = 0;
+      double l1_cand = 0;
 
       // Reset line-search counter, success marker
       ls_iter = 0;
@@ -465,7 +469,7 @@ namespace casadi {
 
           // Candidate step
           casadi_copy(m->z, nx_, m->z_cand);
-          casadi_axpy(nx_, t, m->dx, m->z_cand);
+          casadi_axpy(nx_, t, m->dz, m->z_cand);
 
           // Evaluating objective and constraints
           m->arg[0] = m->z_cand;
@@ -478,10 +482,9 @@ namespace casadi {
             continue;
           }
 
-          // Calculating merit-function in candidate
-          l1_infeas = casadi_max_viol(nx_+ng_, m->z_cand, m->lbz, m->ubz);
-          L1merit_cand = fk_cand + m->sigma * l1_infeas;
-          if (L1merit_cand <= meritmax + t * c1_ * L1dir) {
+          // Check merit-function candidate
+          l1_cand = fk_cand + m->sigma * casadi_sum_viol(nx_+ng_, m->z_cand, m->lbz, m->ubz);
+          if (l1_cand <= l1 + c1_ * t * tl1) {
             break;
           }
 
@@ -499,7 +502,7 @@ namespace casadi {
         casadi_scal(nx_ + ng_, 1-t, m->lam);
         casadi_axpy(nx_+ng_, t, m->dlam, m->lam);
 
-        casadi_scal(nx_, t, m->dx);
+        casadi_scal(nx_, t, m->dz);
 
       } else {
         // Full step
@@ -507,7 +510,7 @@ namespace casadi {
       }
 
       // Take step
-      casadi_axpy(nx_, 1., m->dx, m->z);
+      casadi_axpy(nx_, 1., m->dz, m->z);
 
       if (!exact_hessian_) {
         // Evaluate the gradient of the Lagrangian with the old x but new lam (for BFGS)
@@ -540,30 +543,33 @@ namespace casadi {
     print("\n");
   }
 
-  void Sqpmethod::solve_QP(SqpmethodMemory* m, const double* H, const double* g,
-                           const double* lbdz, const double* ubdz, const double* A,
-                           double* x_opt, double* dlam) const {
+  void Sqpmethod::solve_QP(SqpmethodMemory* m) const {
     // Inputs
     fill_n(m->arg, qpsol_.n_in(), nullptr);
-    m->arg[CONIC_H] = H;
-    m->arg[CONIC_G] = g;
-    m->arg[CONIC_X0] = x_opt;
-    m->arg[CONIC_LAM_X0] = dlam;
-    m->arg[CONIC_LAM_A0] = dlam + nx_;
-    m->arg[CONIC_LBX] = lbdz;
-    m->arg[CONIC_UBX] = ubdz;
-    m->arg[CONIC_A] = A;
-    m->arg[CONIC_LBA] = lbdz+nx_;
-    m->arg[CONIC_UBA] = ubdz+nx_;
+    m->arg[CONIC_H] = m->Bk;
+    m->arg[CONIC_G] = m->gf;
+    m->arg[CONIC_X0] = m->dz;
+    m->arg[CONIC_LAM_X0] = m->dlam;
+    m->arg[CONIC_LAM_A0] = m->dlam + nx_;
+    m->arg[CONIC_LBX] = m->lbdz;
+    m->arg[CONIC_UBX] = m->ubdz;
+    m->arg[CONIC_A] = m->Jk;
+    m->arg[CONIC_LBA] = m->lbdz+nx_;
+    m->arg[CONIC_UBA] = m->ubdz+nx_;
 
     // Outputs
     fill_n(m->res, qpsol_.n_out(), nullptr);
-    m->res[CONIC_X] = x_opt;
-    m->res[CONIC_LAM_X] = dlam;
-    m->res[CONIC_LAM_A] = dlam + nx_;
+    m->res[CONIC_X] = m->dz;
+    m->res[CONIC_LAM_X] = m->dlam;
+    m->res[CONIC_LAM_A] = m->dlam + nx_;
 
     // Solve the QP
     qpsol_(m->arg, m->res, m->iw, m->w, 0);
+
+    // Calculate g components of dz
+    casadi_fill(m->dz+nx_, ng_, 0.);
+    casadi_mv(m->Jk, Asp_, m->dz, m->dz+nx_, false);
+
     if (verbose_) print("QP solved\n");
   }
 
