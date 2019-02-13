@@ -138,6 +138,11 @@
     static bool mexcheckinterrupted() {
       return utIsInterruptPending();
     }
+
+    void mexclearinterrupted() {
+      utSetInterruptPending(false);
+    }
+
 #endif
   }
 %}
@@ -184,6 +189,7 @@
 
   // @jgillis: please document
   casadi::InterruptHandler::checkInterrupted = casadi::mexcheckinterrupted;
+  casadi::InterruptHandler::clearInterrupted = casadi::mexclearinterrupted;
 %}
 #endif
 
