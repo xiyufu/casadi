@@ -182,47 +182,27 @@ namespace casadi {
     Function dm = df.map(n_, parallelization());
 
     // Input expressions
-    vector<MX> arg = dm.mx_in();
+    vector<MX> sym_arg = dm.mx_in();
+    vector<MX> arg = sym_arg;
 
-    // Need to reorder sensitivity inputs
-    vector<MX> res = arg;
-    vector<MX>::iterator it=res.begin()+n_in_+n_out_;
-    vector<casadi_int> ind;
-    for (casadi_int i=0; i<n_in_; ++i, ++it) {
-      casadi_int sz = f_.size2_in(i);
-      ind.clear();
-      for (casadi_int k=0; k<n_; ++k) {
-        for (casadi_int d=0; d<nfwd; ++d) {
-          for (casadi_int j=0; j<sz; ++j) {
-            ind.push_back((d*n_ + k)*sz + j);
-          }
-        }
-      }
-      *it = (*it)(Slice(), ind); // NOLINT
+    // Reorder sensitivity inputs
+    casadi_int offset = n_in_+n_out_;
+    for (casadi_int i=0; i<n_in_; ++i) {
+      arg[offset+i] = repweave(arg[offset+i], n_, nfwd);
     }
 
     // Get output expressions
-    res = dm(res);
+    vector<MX> res = dm(arg);
 
     // Reorder sensitivity outputs
-    it = res.begin();
-    for (casadi_int i=0; i<n_out_; ++i, ++it) {
-      casadi_int sz = f_.size2_out(i);
-      ind.clear();
-      for (casadi_int d=0; d<nfwd; ++d) {
-        for (casadi_int k=0; k<n_; ++k) {
-          for (casadi_int j=0; j<sz; ++j) {
-            ind.push_back((k*nfwd + d)*sz + j);
-          }
-        }
-      }
-      *it = (*it)(Slice(), ind); // NOLINT
+    for (auto & e : res) {
+      e = repweave(e, nfwd, n_);
     }
 
     // Construct return function
     Dict custom_opts = opts;
     custom_opts["always_inline"] = true;
-    return Function(name, arg, res, inames, onames, custom_opts);
+    return Function(name, sym_arg, res, inames, onames, custom_opts);
   }
 
   Function Map
@@ -235,47 +215,27 @@ namespace casadi {
     Function dm = df.map(n_, parallelization());
 
     // Input expressions
-    vector<MX> arg = dm.mx_in();
+    vector<MX> sym_arg = dm.mx_in();
+    vector<MX> arg = sym_arg;
 
-    // Need to reorder sensitivity inputs
-    vector<MX> res = arg;
-    vector<MX>::iterator it=res.begin()+n_in_+n_out_;
-    vector<casadi_int> ind;
-    for (casadi_int i=0; i<n_out_; ++i, ++it) {
-      casadi_int sz = f_.size2_out(i);
-      ind.clear();
-      for (casadi_int k=0; k<n_; ++k) {
-        for (casadi_int d=0; d<nadj; ++d) {
-          for (casadi_int j=0; j<sz; ++j) {
-            ind.push_back((d*n_ + k)*sz + j);
-          }
-        }
-      }
-      *it = (*it)(Slice(), ind); // NOLINT
+    // Reorder sensitivity inputs
+    casadi_int offset = n_in_+n_out_;
+    for (casadi_int i=0; i<n_out_; ++i) {
+      arg[offset+i] = repweave(arg[offset+i], nadj, n_);
     }
 
     // Get output expressions
-    res = dm(res);
+    vector<MX> res = dm(arg);
 
     // Reorder sensitivity outputs
-    it = res.begin();
-    for (casadi_int i=0; i<n_in_; ++i, ++it) {
-      casadi_int sz = f_.size2_in(i);
-      ind.clear();
-      for (casadi_int d=0; d<nadj; ++d) {
-        for (casadi_int k=0; k<n_; ++k) {
-          for (casadi_int j=0; j<sz; ++j) {
-            ind.push_back((k*nadj + d)*sz + j);
-          }
-        }
-      }
-      *it = (*it)(Slice(), ind); // NOLINT
+    for (auto & e : res) {
+      e = repweave(e, n_, nadj);
     }
 
     Dict custom_opts = opts;
     custom_opts["always_inline"] = true;
     // Construct return function
-    return Function(name, arg, res, inames, onames, custom_opts);
+    return Function(name, sym_arg, res, inames, onames, custom_opts);
   }
 
   Function Map::get_jacobian(const std::string& name,
